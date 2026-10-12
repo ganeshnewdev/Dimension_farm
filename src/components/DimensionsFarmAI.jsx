@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Bot, Send, Sparkles, X, Minimize2, Maximize2, RefreshCw } from 'lucide-react';
-import { askDimensionsAI } from '../services/aiService';
+import { askDimensionsAIChat } from '../services/aiService';
 
 export default function DimensionsFarmAI({ isOpen, onClose, t }) {
   const [messages, setMessages] = useState([
@@ -40,7 +40,7 @@ export default function DimensionsFarmAI({ isOpen, onClose, t }) {
     setLoading(true);
 
     try {
-      const reply = await askDimensionsAI(userText, messages);
+      const reply = await askDimensionsAIChat(userText, messages);
       const aiMsg = {
         id: Date.now() + 1,
         sender: "ai",
