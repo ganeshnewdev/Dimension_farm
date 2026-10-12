@@ -1,31 +1,32 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
+  content: ['./index.html', './src/**/*.{js,jsx}'],
   theme: {
     extend: {
       colors: {
         forest: {
-          950: '#0B291A',
-          900: '#145C38',
+          950: '#0b291a',
+          900: '#145c38',
           850: '#193729',
-          800: '#1E6B43',
-          700: '#23764A',
-          600: '#2F855A',
-          500: '#75B85B',
-          400: '#95D17B',
-          100: '#E8F5E9',
-          50: '#F4F7F3',
+          800: '#1e6b43',
+          700: '#23764a',
+          600: '#2f855a',
+          500: '#75b85b',
+          400: '#95d17b',
+          100: '#e8f5e9',
+          50: '#f4f7f3',
         },
-        gold: {
-          400: '#F6CF63',
-          500: '#D4AF37',
-          600: '#AA820A'
-        }
+      },
+      keyframes: {
+        'slide-up': {
+          '0%': { opacity: '0', transform: 'translateY(12px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+      },
+      animation: {
+        'slide-up': 'slide-up 0.25s ease-out',
       },
     },
   },
   plugins: [],
-}
+};

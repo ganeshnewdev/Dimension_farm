@@ -1,63 +1,89 @@
-// Optional backend URL. Empty = same origin (local dev / Render). On GitHub Pages there is
-// no backend, so set VITE_API_BASE_URL to a hosted server to enable the AI features.
+import { getOfflineAdvice } from '../lib/localAdvisor.js';
+
+// Backend base URL. Empty = same origin (local dev via the Vite proxy, or the Express
+// server hosting the build). On static hosting (GitHub Pages) set VITE_API_BASE_URL at
+// build time to point at a hosted server; otherwise the app runs in offline mode.
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
-export async function analyzeCropImageWithGemini({ imageBase64, mimeType, cropType, notes }) {
-  const unavailable = 'फसल स्कैनर के लिए सर्वर उपलब्ध नहीं है। कृपया बाद में प्रयास करें।';
+async function fetchWithTimeout(url, options = {}, ms = 30000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+let healthPromise = null;
+
+// { online: server reachable, ai: Gemini key configured }. Cached for the session so that
+// static hosting does not spam 404s on every message.
+export function checkBackend(force = false) {
+  if (!healthPromise || force) {
+    healthPromise = fetchWithTimeout(`${API_BASE}/api/health`, {}, 6000)
+      .then(async (res) => {
+        if (!res.ok) return { online: false, ai: false };
+        const json = await res.json().catch(() => null);
+        return { online: json?.ok === true, ai: json?.ai === true };
+      })
+      .catch(() => ({ online: false, ai: false }));
+  }
+  return healthPromise;
+}
+
+export class ScannerError extends Error {
+  constructor(code, message) {
+    super(message || code);
+    this.code = code; // offline | config | rate | bad_request | upstream | server
+  }
+}
+
+export async function analyzeCrop({ imageDataUrl, cropType, notes, lang }) {
+  const status = await checkBackend();
+  if (!status.online) throw new ScannerError('offline');
+  if (!status.ai) throw new ScannerError('config');
+
   let res;
   try {
-    res = await fetch(`${API_BASE}/api/ai/crop-scanner`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ imageBase64, mimeType, cropType, notes })
-    });
+    res = await fetchWithTimeout(
+      `${API_BASE}/api/ai/crop-scanner`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64: imageDataUrl, mimeType: 'image/jpeg', cropType, notes, lang }),
+      },
+      60000,
+    );
   } catch {
-    throw new Error(unavailable);
+    throw new ScannerError('offline');
   }
 
-  let data;
-  try {
-    data = await res.json();
-  } catch {
-    // Static hosting returns an HTML 404 page instead of JSON
-    throw new Error(unavailable);
+  const body = await res.json().catch(() => null);
+  if (!res.ok || !body?.diagnosis) {
+    const code = body?.code || (res.status === 429 ? 'rate' : 'server');
+    throw new ScannerError(code);
   }
-  if (!res.ok) {
-    throw new Error(data.error || 'फसल की जांच करने में सर्वर असमर्थ रहा।');
-  }
-  return data.diagnosis;
+  return body.diagnosis;
 }
 
-export async function askDimensionsAIChat(message, history = []) {
+// Returns { text, source: 'ai' | 'offline' }. Never throws: the offline advisor is the fallback.
+export async function askChat({ message, history, lang }) {
   try {
-    const res = await fetch(`${API_BASE}/api/ai/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, history })
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      return data.reply;
+    const status = await checkBackend();
+    if (status.online && status.ai) {
+      const res = await fetchWithTimeout(`${API_BASE}/api/ai/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, history, lang }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (typeof data.reply === 'string' && data.reply.trim()) return { text: data.reply, source: 'ai' };
+      }
     }
-  } catch (e) {
-    console.warn("Backend chat failed, falling back to smart local knowledge");
+  } catch {
+    // fall through to offline answer
   }
-
-  // Fallback intelligent agronomist logic
-  return generateLocalSmartAdvice(message);
-}
-
-function generateLocalSmartAdvice(query) {
-  const q = query.toLowerCase();
-  if (q.includes("मौसम") || q.includes("weather") || q.includes("स्प्रे") || q.includes("spray")) {
-    return "डाइमेंशन्स फार्म सैटेलाइट विश्लेषण: कीटनाशक या फफूंदनाशी छिड़काव के लिए हवा की गति 15 km/h से कम और वर्षा की संभावना 20% से नीचे होनी चाहिए। दोपहर की तेज धूप में छिड़काव से बचें; सुबह 8 से 11 बजे या शाम 4 से 6 बजे का समय सर्वोत्तम है।";
-  }
-  if (q.includes("dap") || q.includes("यूरिया") || q.includes("खाद") || q.includes("fertilizer")) {
-    return "ICAR अनुमोदित उर्वरक प्रबंधन: बुवाई के समय आधार खुराक के रूप में 1 बैग DAP (50kg) + 25kg MOP (पोटाश) प्रति एकड़ दें। पहली और दूसरी सिंचाई पर 45-45kg नीम कोटेड यूरिया विभाजित मात्रा में दें। जिंक की कमी होने पर 5kg जिंक सल्फेट 33% का उपयोग करें।";
-  }
-  if (q.includes("कीट") || q.includes("इल्ली") || q.includes("रोग") || q.includes("pest") || q.includes("fungus")) {
-    return "समन्वित कीट प्रबंधन (IPM): प्रारंभिक अवस्था में जैविक उपचार हेतु 5ml नीम तेल (10,000 PPM) प्रति लीटर पानी में मिलाकर छिड़कें। फफूंद रोगों के लिए कार्बेन्डाजिम + मैन्कोज़ेब (2 ग्राम/लीटर) या कॉपर ऑक्सीक्लोराइड का प्रयोग करें।";
-  }
-  return "नमस्ते किसान भाई! मैं डाइमेंशन्स फार्म एआई (Dimensions Farm AI) हूँ। आप अपनी फसल (गेहूं, धान, सरसों, कपास, सोयाबीन, प्याज आदि) की बुवाई, रोग निदान, उर्वरक मात्रा या मंडी भाव से जुड़ा कोई भी सवाल पूछ सकते हैं।";
+  return { text: getOfflineAdvice(message, lang), source: 'offline' };
 }

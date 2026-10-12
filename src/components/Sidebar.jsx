@@ -1,120 +1,84 @@
 import React from 'react';
-import { 
-  Home, 
-  MapPin, 
-  CloudSun, 
-  TrendingUp, 
-  BookOpen, 
-  ScanLine, 
-  ShoppingBag, 
-  Wallet, 
-  Coins, 
-  Bot, 
-  X,
-  Sparkles
-} from 'lucide-react';
+import { BookOpen, Bot, CloudSun, Coins, Home, MapPin, ScanLine, ShoppingBag, TrendingUp, Wallet, X } from 'lucide-react';
+import { useLang } from '../i18n/index.jsx';
+import Logo from './ui/Logo.jsx';
 
-export default function Sidebar({ activeTab, setActiveTab, t, isMobileOpen, setIsMobileOpen, onOpenAI }) {
-  const navItems = [
-    { id: "dashboard", label: "डैशबोर्ड (Home)", icon: Home },
-    { id: "scanner", label: "AI क्रॉप स्कैनर (Vision)", icon: ScanLine, isHot: true },
-    { id: "advisory", label: "फसल सलाह (ICAR)", icon: BookOpen },
-    { id: "income", label: "आय व मुनाफा (P&L)", icon: Coins },
-    { id: "budget", label: "लागत व बजट (Budget)", icon: Wallet },
-    { id: "mandi", label: "लाइव मंडी भाव (Mandi)", icon: TrendingUp },
-    { id: "myFarms", label: "मेरे खेत (My Farms)", icon: MapPin },
-    { id: "weather", label: "लाइव मौसम (Weather)", icon: CloudSun },
-    { id: "shop", label: "कृषि बाज़ार (Marketplace)", icon: ShoppingBag },
-    { id: "aiAssistant", label: "डाइमेंशन्स फार्म AI", icon: Bot, isSpecial: true },
-  ];
+const NAV = [
+  { id: 'dashboard', icon: Home },
+  { id: 'scanner', icon: ScanLine, badge: 'AI' },
+  { id: 'advisory', icon: BookOpen },
+  { id: 'income', icon: Coins },
+  { id: 'budget', icon: Wallet },
+  { id: 'mandi', icon: TrendingUp },
+  { id: 'farms', icon: MapPin },
+  { id: 'weather', icon: CloudSun },
+  { id: 'shop', icon: ShoppingBag },
+];
+
+export default function Sidebar({ route, isOpen, onClose, onOpenAI }) {
+  const { t } = useLang();
 
   return (
     <>
-      {isMobileOpen && (
-        <div 
-          className="fixed inset-0 bg-black/60 z-40 lg:hidden backdrop-blur-sm"
-          onClick={() => setIsMobileOpen(false)}
-        />
-      )}
+      {isOpen && <div className="fixed inset-0 bg-black/60 z-40 lg:hidden backdrop-blur-sm" onClick={onClose} aria-hidden="true" />}
 
-      <aside className={`
-        fixed top-0 left-0 h-full w-64 bg-[#145C38] text-white z-50 flex flex-col transition-transform duration-300 shadow-2xl
-        ${isMobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-      `}>
-        {/* Brand Header */}
-        <div className="p-4 border-b border-[#23764A] flex items-center justify-between bg-[#0E4227]/40">
-          <div className="flex items-center gap-3">
-            <img 
-              src={`${import.meta.env.BASE_URL}logo.png`} 
-              alt="Dimensions Farm" 
-              className="w-11 h-11 rounded-full object-cover shadow-lg border-2 border-[#75B85B] bg-white"
-            />
-            <div>
-              <h1 className="font-bold text-base leading-tight tracking-wide text-white">
-                Dimensions Farm
-              </h1>
-              <p className="text-[11px] text-[#75B85B] font-medium leading-tight">
-                Better Farming, Better Future
-              </p>
+      <aside
+        id="site-nav"
+        className={`fixed top-0 left-0 h-full w-64 bg-forest-900 text-white z-50 flex flex-col transition-transform duration-300 shadow-2xl ${
+          isOpen ? 'translate-x-0' : '-translate-x-full invisible lg:visible lg:translate-x-0'
+        }`}
+      >
+        <div className="p-4 border-b border-forest-700 flex items-center justify-between bg-forest-950/40">
+          <div className="flex items-center gap-3 min-w-0">
+            <Logo alt="Dimensions Farm" className="w-11 h-11 shadow-lg border-2 border-forest-500 shrink-0" />
+            <div className="min-w-0">
+              <p className="font-bold text-base leading-tight tracking-wide">Dimensions Farm</p>
+              <p className="text-[11px] text-forest-500 font-medium leading-tight">{t('brand.tagline')}</p>
             </div>
           </div>
-          <button 
-            onClick={() => setIsMobileOpen(false)}
-            className="lg:hidden p-1 rounded-lg text-gray-300 hover:text-white"
-          >
-            <X className="w-5 h-5" />
+          <button type="button" onClick={onClose} aria-label={t('common.close')} className="lg:hidden p-1 rounded-lg text-gray-300 hover:text-white">
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
-        {/* Navigation list */}
-        <nav className="flex-1 overflow-y-auto py-3 px-3 space-y-1">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
+        <nav aria-label={t('nav.label')} className="flex-1 overflow-y-auto py-3 px-3 space-y-1">
+          {NAV.map(({ id, icon: Icon, badge }) => {
+            const active = route === id;
             return (
-              <button
-                key={item.id}
-                onClick={() => {
-                  if (item.id === "aiAssistant") {
-                    onOpenAI();
-                  } else {
-                    setActiveTab(item.id);
-                  }
-                  setIsMobileOpen(false);
-                }}
-                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                  item.isSpecial
-                    ? 'bg-gradient-to-r from-emerald-600 to-[#75B85B] text-white shadow-md'
-                    : isActive
-                    ? 'bg-[#75B85B] text-white shadow-md font-bold'
-                    : 'text-gray-200 hover:bg-[#23764A] hover:text-white'
+              <a
+                key={id}
+                href={`#/${id}`}
+                onClick={onClose}
+                aria-current={active ? 'page' : undefined}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-colors ${
+                  active ? 'bg-forest-500 text-white shadow-md font-bold' : 'text-gray-200 hover:bg-forest-700 hover:text-white'
                 }`}
               >
-                <div className="flex items-center gap-3">
-                  <Icon className="w-4 h-4 flex-shrink-0" />
-                  <span>{item.label}</span>
-                </div>
-                {item.isHot && (
-                  <span className="text-[9px] bg-amber-400 text-black px-1.5 py-0.5 rounded font-extrabold uppercase">
-                    AI
-                  </span>
-                )}
-              </button>
+                <span className="flex items-center gap-3">
+                  <Icon className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  {t(`nav.${id}`)}
+                </span>
+                {badge && <span className="text-[9px] bg-amber-400 text-black px-1.5 py-0.5 rounded font-extrabold">{badge}</span>}
+              </a>
             );
           })}
+
+          <button
+            type="button"
+            onClick={() => {
+              onClose();
+              onOpenAI();
+            }}
+            className="w-full mt-2 flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-emerald-600 to-forest-500 text-white shadow-md"
+          >
+            <Bot className="w-4 h-4 shrink-0" aria-hidden="true" />
+            {t('nav.ai')}
+          </button>
         </nav>
 
-        {/* Footer info */}
-        <div className="p-3 border-t border-[#23764A] bg-[#0E4227]/60 flex items-center gap-2 text-xs">
-          <img 
-            src={`${import.meta.env.BASE_URL}logo.png`} 
-            alt="Logo Mini" 
-            className="w-6 h-6 rounded-full border border-emerald-400 object-cover bg-white"
-          />
-          <div className="leading-tight">
-            <p className="font-bold text-white">डाइमेंशन्स फार्म (v4.0)</p>
-            <p className="text-[10px] text-emerald-300">स्मार्ट कृषि पोर्टल 2026</p>
-          </div>
+        <div className="p-3 border-t border-forest-700 bg-forest-950/60 text-[11px] leading-tight">
+          <p className="font-bold text-white">{t('brand.footer')}</p>
+          <p className="text-emerald-300">{t('brand.footerSub')}</p>
         </div>
       </aside>
     </>

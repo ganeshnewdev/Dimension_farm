@@ -1,412 +1,408 @@
-import React, { useState, useEffect } from 'react';
-import { Wallet, Coins, Plus, Trash2, ArrowUpRight, ArrowDownRight, TrendingUp, Filter, BarChart3 } from 'lucide-react';
-import { INITIAL_EXPENSES, INITIAL_INCOME } from '../data/initialData';
+import React, { useMemo, useState } from 'react';
+import { BarChart3, Coins, Download, Plus, Trash2, TrendingUp, Wallet } from 'lucide-react';
+import { useLang } from '../i18n/index.jsx';
+import { usePersistentState } from '../hooks/usePersistentState.js';
+import { useToast } from './ui/Toast.jsx';
+import { CROPS, pick } from '../data/crops.js';
+import { EXPENSE_CATEGORIES, parsePositive, summarizeByCrop, toCSV, totals } from '../lib/finance.js';
+import { formatDate, formatINR, todayISO, isValidISODate, uid } from '../lib/format.js';
+import { KEYS, loadExpenses, loadIncome, materializeSampleLedger, normalizeExpense, normalizeIncome } from '../lib/records.js';
+import { cleanText } from '../lib/validators.js';
 
-export default function FinancesSection({ defaultTab = 'income' }) {
-  const [tab, setTab] = useState(defaultTab);
+const inputClass = 'w-full p-2.5 bg-gray-50 border border-gray-300 rounded-xl outline-none text-xs focus:ring-2 focus:ring-forest-500';
 
-  // Persistent state using LocalStorage
-  const [expenses, setExpenses] = useState(() => {
-    const saved = localStorage.getItem('dim_farm_expenses');
-    return saved ? JSON.parse(saved) : INITIAL_EXPENSES;
-  });
+function Field({ id, label, error, children }) {
+  return (
+    <div>
+      <label htmlFor={id} className="font-medium text-gray-700 block mb-1 text-xs">
+        {label}
+      </label>
+      {children}
+      {error && (
+        <p role="alert" className="text-[11px] text-red-600 mt-1">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
 
-  const [incomeList, setIncomeList] = useState(() => {
-    const saved = localStorage.getItem('dim_farm_income');
-    return saved ? JSON.parse(saved) : INITIAL_INCOME;
-  });
+function Kpi({ label, value, tone = 'text-forest-900', icon: Icon, hint }) {
+  return (
+    <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm flex items-center justify-between gap-3">
+      <div className="min-w-0">
+        <span className="text-xs text-gray-500 font-medium">{label}</span>
+        <p className={`text-2xl font-extrabold mt-1 truncate ${tone}`}>{value}</p>
+        {hint && <span className="text-[11px] text-gray-500">{hint}</span>}
+      </div>
+      <div className="w-12 h-12 rounded-xl bg-emerald-50 text-forest-900 flex items-center justify-center shrink-0">
+        <Icon className="w-6 h-6" aria-hidden="true" />
+      </div>
+    </div>
+  );
+}
 
-  // New Expense Form
-  const [expCategory, setExpCategory] = useState('Fertilizers (उर्वरक)');
-  const [expCrop, setExpCrop] = useState('गेहूं (Wheat PBW 550)');
-  const [expAmount, setExpAmount] = useState('');
-  const [expDesc, setExpDesc] = useState('');
-  const [expDate, setExpDate] = useState(new Date().toISOString().split('T')[0]);
+function download(filename, text) {
+  // BOM so Excel opens Hindi text correctly.
+  const blob = new Blob([`﻿${text}`], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
-  // New Income Form
-  const [incCrop, setIncCrop] = useState('गेहूं (Wheat PBW 550)');
-  const [incQty, setIncQty] = useState('');
-  const [incRate, setIncRate] = useState('');
-  const [incMandi, setIncMandi] = useState('स्थानीय APMC मंडी');
-  const [incDate, setIncDate] = useState(new Date().toISOString().split('T')[0]);
+export default function FinancesSection({ tab, onTabChange, farms }) {
+  const { t, lang } = useLang();
+  const notify = useToast();
+  const [expenses, setExpenses] = usePersistentState(KEYS.expenses, loadExpenses);
+  const [income, setIncome] = usePersistentState(KEYS.income, loadIncome);
 
-  useEffect(() => {
-    localStorage.setItem('dim_farm_expenses', JSON.stringify(expenses));
-  }, [expenses]);
+  const cropNames = useMemo(() => {
+    const names = new Set(CROPS.map((c) => pick(c.name, lang)));
+    farms.forEach((f) => f.cropLabel && names.add(f.cropLabel));
+    return [...names];
+  }, [farms, lang]);
 
-  useEffect(() => {
-    localStorage.setItem('dim_farm_income', JSON.stringify(incomeList));
-  }, [incomeList]);
+  const [exp, setExp] = useState({ category: 'fertilizer', crop: '', amount: '', description: '', date: todayISO() });
+  const [inc, setInc] = useState({ crop: '', quantity: '', rate: '', mandi: '', date: todayISO() });
+  const [expErrors, setExpErrors] = useState({});
+  const [incErrors, setIncErrors] = useState({});
 
-  const handleAddExpense = (e) => {
+  const sums = totals(expenses, income);
+  const perCrop = useMemo(() => summarizeByCrop(expenses, income), [expenses, income]);
+  const hasSamples = expenses.some((e) => e.sample) || income.some((i) => i.sample);
+  const isEmpty = expenses.length === 0 && income.length === 0;
+
+  const addExpense = (e) => {
     e.preventDefault();
-    if (!expAmount || isNaN(expAmount)) return;
-    const item = {
-      id: `exp-${Date.now()}`,
-      date: expDate,
-      category: expCategory,
-      crop: expCrop,
-      amount: parseFloat(expAmount),
-      description: expDesc || "खेत परिचालन खर्च"
-    };
-    setExpenses([item, ...expenses]);
-    setExpAmount('');
-    setExpDesc('');
+    const next = {};
+    const amount = parsePositive(exp.amount);
+    if (amount === null) next.amount = t('fin.err.amount');
+    if (!isValidISODate(exp.date)) next.date = t('farm.err.date');
+    setExpErrors(next);
+    if (Object.keys(next).length) return;
+    const row = normalizeExpense({
+      id: uid('exp'),
+      date: exp.date,
+      category: exp.category,
+      crop: exp.crop,
+      amount,
+      description: exp.description || t('fin.defaultExpense'),
+      sample: false,
+    });
+    if (!row) return;
+    setExpenses((list) => [row, ...list]);
+    setExp((s) => ({ ...s, amount: '', description: '' }));
+    notify(t('fin.savedExpense'), 'success');
   };
 
-  const handleAddIncome = (e) => {
+  const addIncome = (e) => {
     e.preventDefault();
-    if (!incQty || !incRate) return;
-    const qty = parseFloat(incQty);
-    const rate = parseFloat(incRate);
-    const item = {
-      id: `inc-${Date.now()}`,
-      date: incDate,
-      crop: incCrop,
-      quantity: qty,
-      unit: "क्विंटल",
+    const next = {};
+    const quantity = parsePositive(inc.quantity);
+    const rate = parsePositive(inc.rate);
+    if (!cleanText(inc.crop, 60)) next.crop = t('farm.err.crop');
+    if (quantity === null) next.quantity = t('fin.err.quantity');
+    if (rate === null) next.rate = t('fin.err.rate');
+    if (!isValidISODate(inc.date)) next.date = t('farm.err.date');
+    setIncErrors(next);
+    if (Object.keys(next).length) return;
+    const row = normalizeIncome({
+      id: uid('inc'),
+      date: inc.date,
+      crop: inc.crop,
+      quantity,
       ratePerUnit: rate,
-      totalRevenue: qty * rate,
-      mandi: incMandi,
-      notes: "सत्यापित फसल बिक्री"
-    };
-    setIncomeList([item, ...incomeList]);
-    setIncQty('');
-    setIncRate('');
+      mandi: inc.mandi || t('fin.defaultMandi'),
+      sample: false,
+    });
+    if (!row) return;
+    setIncome((list) => [row, ...list]);
+    setInc((s) => ({ ...s, quantity: '', rate: '' }));
+    notify(t('fin.savedIncome'), 'success');
   };
 
-  const deleteExpense = (id) => {
-    setExpenses(expenses.filter(e => e.id !== id));
+  const removeExpense = (id) => {
+    if (window.confirm(t('fin.confirmDelete'))) setExpenses((list) => list.filter((x) => x.id !== id));
+  };
+  const removeIncome = (id) => {
+    if (window.confirm(t('fin.confirmDelete'))) setIncome((list) => list.filter((x) => x.id !== id));
   };
 
-  const deleteIncome = (id) => {
-    setIncomeList(incomeList.filter(i => i.id !== id));
+  const loadSamples = () => {
+    const sample = materializeSampleLedger();
+    setExpenses((list) => [...sample.expenses.filter(Boolean), ...list]);
+    setIncome((list) => [...sample.income.filter(Boolean), ...list]);
   };
 
-  // Calculations
-  const totalExpense = expenses.reduce((acc, curr) => acc + curr.amount, 0);
-  const totalRevenue = incomeList.reduce((acc, curr) => acc + curr.totalRevenue, 0);
-  const netProfit = totalRevenue - totalExpense;
-  const profitMargin = totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(1) : 0;
+  const clearSamples = () => {
+    setExpenses((list) => list.filter((x) => !x.sample));
+    setIncome((list) => list.filter((x) => !x.sample));
+  };
+
+  const exportCSV = () => {
+    const rows = [
+      ...income.map((i) => [i.date, 'income', i.crop, '', i.quantity, i.ratePerUnit, i.totalRevenue, i.mandi]),
+      ...expenses.map((x) => [x.date, 'expense', x.crop, x.category, '', '', x.amount, x.description]),
+    ].sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    download(
+      `dimensions-farm-ledger-${todayISO()}.csv`,
+      toCSV(['date', 'type', 'crop', 'category', 'quantity_quintal', 'rate_per_quintal', 'amount', 'note'], rows),
+    );
+  };
 
   return (
     <div className="space-y-6">
-      {/* Top Toggle & Summary Cards */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-[#193729] flex items-center gap-2">
-            <TrendingUp className="w-6 h-6 text-[#145C38]" />
-            खेत का वित्तीय खाता एवं लाभ-हानि विश्लेषण
+          <h2 className="text-xl font-bold text-forest-850 flex items-center gap-2">
+            <TrendingUp className="w-6 h-6 text-forest-900" aria-hidden="true" />
+            {t('fin.title')}
           </h2>
-          <p className="text-xs text-gray-500 mt-0.5">
-            लागत, उत्पादन, मंडी बिक्री और शुद्ध मुनाफा (Net Profit / Loss) का वास्तविक ब्योरा
-          </p>
+          <p className="text-xs text-gray-500 mt-0.5">{t('fin.subtitle')}</p>
         </div>
-
-        {/* Tab switch */}
-        <div className="flex bg-gray-200/80 p-1 rounded-xl text-xs font-bold">
-          <button
-            onClick={() => setTab('income')}
-            className={`px-4 py-2 rounded-lg transition-all ${
-              tab === 'income' ? 'bg-[#145C38] text-white shadow-sm' : 'text-gray-700 hover:text-[#145C38]'
-            }`}
-          >
-            आय एवं लाभ (Income & Profit)
-          </button>
-          <button
-            onClick={() => setTab('budget')}
-            className={`px-4 py-2 rounded-lg transition-all ${
-              tab === 'budget' ? 'bg-[#145C38] text-white shadow-sm' : 'text-gray-700 hover:text-[#145C38]'
-            }`}
-          >
-            लागत व खर्च (Budget & Expenses)
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex bg-gray-200/80 p-1 rounded-xl text-xs font-bold" role="tablist" aria-label={t('fin.title')}>
+            {[
+              ['income', t('fin.tabIncome')],
+              ['budget', t('fin.tabBudget')],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={tab === id}
+                onClick={() => onTabChange(id)}
+                className={`px-4 py-2 rounded-lg transition-colors ${tab === id ? 'bg-forest-900 text-white shadow-sm' : 'text-gray-700 hover:text-forest-900'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <button type="button" onClick={exportCSV} disabled={isEmpty} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2.5 rounded-xl bg-white border border-gray-300 hover:bg-gray-50 disabled:opacity-50">
+            <Download className="w-4 h-4" aria-hidden="true" />
+            {t('fin.export')}
           </button>
         </div>
       </div>
 
-      {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm flex items-center justify-between">
-          <div>
-            <span className="text-xs text-gray-500 font-medium">कुल फसल बिक्री आय</span>
-            <p className="text-2xl font-extrabold text-[#145C38] mt-1">₹{totalRevenue.toLocaleString('en-IN')}</p>
-            <span className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1 mt-0.5">
-              <ArrowUpRight className="w-3.5 h-3.5" /> दर्ज आवक
-            </span>
-          </div>
-          <div className="w-12 h-12 rounded-xl bg-emerald-50 text-[#145C38] flex items-center justify-center">
-            <Coins className="w-6 h-6" />
-          </div>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm flex items-center justify-between">
-          <div>
-            <span className="text-xs text-gray-500 font-medium">कुल परिचालन खर्च</span>
-            <p className="text-2xl font-extrabold text-amber-700 mt-1">₹{totalExpense.toLocaleString('en-IN')}</p>
-            <span className="text-[11px] text-amber-600 font-semibold flex items-center gap-1 mt-0.5">
-              <ArrowDownRight className="w-3.5 h-3.5" /> कुल लागत
-            </span>
-          </div>
-          <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center">
-            <Wallet className="w-6 h-6" />
-          </div>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm flex items-center justify-between">
-          <div>
-            <span className="text-xs text-gray-500 font-medium">शुद्ध मुनाफा (Net Profit)</span>
-            <p className={`text-2xl font-extrabold mt-1 ${netProfit >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
-              ₹{netProfit.toLocaleString('en-IN')}
-            </p>
-            <span className="text-[11px] text-gray-500">आय - समस्त खर्च</span>
-          </div>
-          <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
-            <TrendingUp className="w-6 h-6" />
-          </div>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm flex items-center justify-between">
-          <div>
-            <span className="text-xs text-gray-500 font-medium">लाभ मार्जिन</span>
-            <p className="text-2xl font-extrabold text-[#193729] mt-1">{profitMargin}%</p>
-            <span className="text-[11px] text-emerald-600 font-medium">निवेश पर प्रतिफल</span>
-          </div>
-          <div className="w-12 h-12 rounded-xl bg-gray-50 text-gray-700 flex items-center justify-center">
-            <BarChart3 className="w-6 h-6" />
-          </div>
-        </div>
+        <Kpi label={t('fin.revenue')} value={formatINR(sums.totalRevenue)} icon={Coins} />
+        <Kpi label={t('fin.expense')} value={formatINR(sums.totalExpense)} tone="text-amber-700" icon={Wallet} />
+        <Kpi label={t('fin.net')} value={formatINR(sums.netProfit)} tone={sums.netProfit >= 0 ? 'text-emerald-700' : 'text-red-600'} icon={TrendingUp} hint={t('fin.netHint')} />
+        <Kpi label={t('fin.margin')} value={sums.margin === null ? '—' : `${sums.margin.toFixed(1)}%`} tone="text-forest-850" icon={BarChart3} hint={sums.margin === null ? t('fin.marginNone') : undefined} />
       </div>
 
-      {/* Main Tab View: Income Tab */}
-      {tab === 'income' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Add Income Form */}
-          <div className="lg:col-span-4 bg-white p-5 rounded-2xl border border-gray-200 shadow-sm h-fit">
-            <h3 className="font-bold text-sm text-[#145C38] mb-3 flex items-center gap-1.5">
-              <Plus className="w-4 h-4" />
-              फसल बिक्री दर्ज करें
-            </h3>
-            <form onSubmit={handleAddIncome} className="space-y-3 text-xs">
-              <div>
-                <label className="font-medium text-gray-700 block mb-1">फसल का नाम:</label>
-                <input
-                  type="text"
-                  value={incCrop}
-                  onChange={(e) => setIncCrop(e.target.value)}
-                  className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-xl outline-none"
-                  required
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="font-medium text-gray-700 block mb-1">मात्रा (क्विंटल):</label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    placeholder="उदा. 45"
-                    value={incQty}
-                    onChange={(e) => setIncQty(e.target.value)}
-                    className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-xl outline-none"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="font-medium text-gray-700 block mb-1">भाव (₹/क्विंटल):</label>
-                  <input
-                    type="number"
-                    placeholder="उदा. 2650"
-                    value={incRate}
-                    onChange={(e) => setIncRate(e.target.value)}
-                    className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-xl outline-none"
-                    required
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="font-medium text-gray-700 block mb-1">मंडी / खरीदार:</label>
-                <input
-                  type="text"
-                  value={incMandi}
-                  onChange={(e) => setIncMandi(e.target.value)}
-                  className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-xl outline-none"
-                />
-              </div>
-              <div>
-                <label className="font-medium text-gray-700 block mb-1">बिक्री तिथि:</label>
-                <input
-                  type="date"
-                  value={incDate}
-                  onChange={(e) => setIncDate(e.target.value)}
-                  className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-xl outline-none"
-                />
-              </div>
-              <button
-                type="submit"
-                className="w-full bg-[#145C38] hover:bg-[#23764A] text-white font-bold py-2.5 rounded-xl transition-all shadow-sm"
-              >
-                + बिक्री सहेजें
-              </button>
-            </form>
-          </div>
-
-          {/* Income Table */}
-          <div className="lg:col-span-8 bg-white p-5 rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-            <h3 className="font-bold text-sm text-[#193729] mb-3">दर्ज फसल बिक्री रिकॉर्ड्स</h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs text-left">
-                <thead className="bg-[#F4F7F3] text-gray-600 font-semibold border-b border-gray-200">
-                  <tr>
-                    <th className="p-3">तिथि</th>
-                    <th className="p-3">फसल</th>
-                    <th className="p-3">मात्रा</th>
-                    <th className="p-3">भाव (₹)</th>
-                    <th className="p-3">कुल आय (₹)</th>
-                    <th className="p-3">मंडी</th>
-                    <th className="p-3 text-right">क्रिया</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {incomeList.map((inc) => (
-                    <tr key={inc.id} className="hover:bg-gray-50">
-                      <td className="p-3 text-gray-500">{inc.date}</td>
-                      <td className="p-3 font-bold text-gray-800">{inc.crop}</td>
-                      <td className="p-3">{inc.quantity} {inc.unit}</td>
-                      <td className="p-3">₹{inc.ratePerUnit}</td>
-                      <td className="p-3 font-extrabold text-[#145C38]">₹{inc.totalRevenue.toLocaleString('en-IN')}</td>
-                      <td className="p-3 text-gray-500">{inc.mandi}</td>
-                      <td className="p-3 text-right">
-                        <button
-                          onClick={() => deleteIncome(inc.id)}
-                          className="text-red-500 hover:text-red-700 p-1"
-                          title="हटाएं"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+      {isEmpty && (
+        <div className="bg-white border-2 border-dashed border-gray-300 rounded-2xl p-6 text-center">
+          <h3 className="font-bold text-forest-850">{t('fin.emptyTitle')}</h3>
+          <p className="text-xs text-gray-500 mt-1">{t('fin.emptyBody')}</p>
+          <button type="button" onClick={loadSamples} className="mt-3 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-xs font-semibold px-4 py-2 rounded-lg">
+            {t('common.loadSamples')}
+          </button>
         </div>
       )}
 
-      {/* Main Tab View: Budget & Expense Tab */}
-      {tab === 'budget' && (
+      {tab === 'income' ? (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Add Expense Form */}
-          <div className="lg:col-span-4 bg-white p-5 rounded-2xl border border-gray-200 shadow-sm h-fit">
-            <h3 className="font-bold text-sm text-amber-800 mb-3 flex items-center gap-1.5">
-              <Plus className="w-4 h-4" />
-              नया खर्च दर्ज करें
+          <form onSubmit={addIncome} noValidate className="lg:col-span-4 bg-white p-5 rounded-2xl border border-gray-200 shadow-sm h-fit space-y-3">
+            <h3 className="font-bold text-sm text-forest-900 flex items-center gap-1.5">
+              <Plus className="w-4 h-4" aria-hidden="true" />
+              {t('fin.addIncome')}
             </h3>
-            <form onSubmit={handleAddExpense} className="space-y-3 text-xs">
-              <div>
-                <label className="font-medium text-gray-700 block mb-1">खर्च की श्रेणी:</label>
-                <select
-                  value={expCategory}
-                  onChange={(e) => setExpCategory(e.target.value)}
-                  className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-xl outline-none"
-                >
-                  <option value="Seeds (बीज)">Seeds (बीज)</option>
-                  <option value="Fertilizers (उर्वरक)">Fertilizers (उर्वरक)</option>
-                  <option value="Pesticides (कीटनाशक)">Pesticides (कीटनाशक)</option>
-                  <option value="Labour (मजदूरी)">Labour (मजदूरी)</option>
-                  <option value="Irrigation (सिंचाई/बिजली)">Irrigation (सिंचाई/बिजली)</option>
-                  <option value="Machinery (ट्रैक्टर/डीजल)">Machinery (ट्रैक्टर/डीजल)</option>
-                  <option value="Transport (परिवहन)">Transport (परिवहन)</option>
-                  <option value="Other (अन्य)">Other (अन्य)</option>
-                </select>
-              </div>
-              <div>
-                <label className="font-medium text-gray-700 block mb-1">संबंधित फसल:</label>
-                <input
-                  type="text"
-                  value={expCrop}
-                  onChange={(e) => setExpCrop(e.target.value)}
-                  className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-xl outline-none"
-                />
-              </div>
-              <div>
-                <label className="font-medium text-gray-700 block mb-1">खर्च राशि (₹):</label>
-                <input
-                  type="number"
-                  placeholder="उदा. 4500"
-                  value={expAmount}
-                  onChange={(e) => setExpAmount(e.target.value)}
-                  className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-xl outline-none"
-                  required
-                />
-              </div>
-              <div>
-                <label className="font-medium text-gray-700 block mb-1">विवरण / बिल नोट:</label>
-                <input
-                  type="text"
-                  placeholder="उदा. DAP के 2 बैग और यूरिया"
-                  value={expDesc}
-                  onChange={(e) => setExpDesc(e.target.value)}
-                  className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-xl outline-none"
-                />
-              </div>
-              <div>
-                <label className="font-medium text-gray-700 block mb-1">खर्च की तिथि:</label>
-                <input
-                  type="date"
-                  value={expDate}
-                  onChange={(e) => setExpDate(e.target.value)}
-                  className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-xl outline-none"
-                />
-              </div>
-              <button
-                type="submit"
-                className="w-full bg-[#145C38] hover:bg-[#23764A] text-white font-bold py-2.5 rounded-xl transition-all shadow-sm"
-              >
-                + खर्च सहेजें
-              </button>
-            </form>
-          </div>
-
-          {/* Expenses Table */}
-          <div className="lg:col-span-8 bg-white p-5 rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-            <h3 className="font-bold text-sm text-[#193729] mb-3">लागत एवं खर्च इतिहास</h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs text-left">
-                <thead className="bg-[#F4F7F3] text-gray-600 font-semibold border-b border-gray-200">
-                  <tr>
-                    <th className="p-3">तिथि</th>
-                    <th className="p-3">श्रेणी</th>
-                    <th className="p-3">फसल</th>
-                    <th className="p-3">विवरण</th>
-                    <th className="p-3">राशि (₹)</th>
-                    <th className="p-3 text-right">क्रिया</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {expenses.map((exp) => (
-                    <tr key={exp.id} className="hover:bg-gray-50">
-                      <td className="p-3 text-gray-500">{exp.date}</td>
-                      <td className="p-3 font-semibold text-gray-700">{exp.category}</td>
-                      <td className="p-3 font-bold text-gray-800">{exp.crop}</td>
-                      <td className="p-3 text-gray-500 max-w-[200px] truncate">{exp.description}</td>
-                      <td className="p-3 font-bold text-amber-800">₹{exp.amount.toLocaleString('en-IN')}</td>
-                      <td className="p-3 text-right">
-                        <button
-                          onClick={() => deleteExpense(exp.id)}
-                          className="text-red-500 hover:text-red-700 p-1"
-                          title="हटाएं"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <Field id="inc-crop" label={t('fin.crop')} error={incErrors.crop}>
+              <input id="inc-crop" list="crop-names" className={inputClass} value={inc.crop} maxLength={60} onChange={(e) => setInc((s) => ({ ...s, crop: e.target.value }))} />
+            </Field>
+            <div className="grid grid-cols-2 gap-2">
+              <Field id="inc-qty" label={t('fin.quantity')} error={incErrors.quantity}>
+                <input id="inc-qty" className={inputClass} type="number" inputMode="decimal" min="0" step="0.1" value={inc.quantity} onChange={(e) => setInc((s) => ({ ...s, quantity: e.target.value }))} />
+              </Field>
+              <Field id="inc-rate" label={t('fin.rate')} error={incErrors.rate}>
+                <input id="inc-rate" className={inputClass} type="number" inputMode="decimal" min="0" value={inc.rate} onChange={(e) => setInc((s) => ({ ...s, rate: e.target.value }))} />
+              </Field>
             </div>
-          </div>
+            {parsePositive(inc.quantity) !== null && parsePositive(inc.rate) !== null && (
+              <p className="text-xs text-forest-900 font-semibold">
+                {t('fin.totalPreview')}: {formatINR(Number(inc.quantity) * Number(inc.rate))}
+              </p>
+            )}
+            <Field id="inc-mandi" label={t('fin.mandi')}>
+              <input id="inc-mandi" className={inputClass} value={inc.mandi} maxLength={80} onChange={(e) => setInc((s) => ({ ...s, mandi: e.target.value }))} />
+            </Field>
+            <Field id="inc-date" label={t('fin.date')} error={incErrors.date}>
+              <input id="inc-date" className={inputClass} type="date" value={inc.date} onChange={(e) => setInc((s) => ({ ...s, date: e.target.value }))} />
+            </Field>
+            <button type="submit" className="w-full bg-forest-900 hover:bg-forest-700 text-white font-bold py-2.5 rounded-xl text-xs">
+              {t('fin.saveIncome')}
+            </button>
+          </form>
+
+          <section className="lg:col-span-8 bg-white p-5 rounded-2xl border border-gray-200 shadow-sm min-w-0">
+            <h3 className="font-bold text-sm text-forest-850 mb-3">{t('fin.incomeHistory')}</h3>
+            {income.length === 0 ? (
+              <p className="text-xs text-gray-500 py-6 text-center">{t('fin.noIncome')}</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-forest-50 text-gray-600 font-semibold border-b border-gray-200">
+                    <tr>
+                      <th scope="col" className="p-3">{t('fin.date')}</th>
+                      <th scope="col" className="p-3">{t('fin.crop')}</th>
+                      <th scope="col" className="p-3">{t('fin.qtyShort')}</th>
+                      <th scope="col" className="p-3">{t('fin.rateShort')}</th>
+                      <th scope="col" className="p-3">{t('fin.total')}</th>
+                      <th scope="col" className="p-3">{t('fin.mandiShort')}</th>
+                      <th scope="col" className="p-3 text-right"><span className="sr-only">{t('common.delete')}</span></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {income.map((i) => (
+                      <tr key={i.id} className="hover:bg-gray-50">
+                        <td className="p-3 text-gray-500 whitespace-nowrap">{formatDate(i.date, lang)}</td>
+                        <td className="p-3 font-bold text-gray-800">
+                          {i.crop || '—'}
+                          {i.sample && <span className="ml-1 text-[10px] font-bold uppercase text-amber-800 bg-amber-50 border border-amber-200 px-1 rounded">{t('common.sample')}</span>}
+                        </td>
+                        <td className="p-3 whitespace-nowrap">{i.quantity} {t('fin.quintal')}</td>
+                        <td className="p-3">{formatINR(i.ratePerUnit)}</td>
+                        <td className="p-3 font-extrabold text-forest-900">{formatINR(i.totalRevenue)}</td>
+                        <td className="p-3 text-gray-500">{i.mandi}</td>
+                        <td className="p-3 text-right">
+                          <button type="button" onClick={() => removeIncome(i.id)} aria-label={t('common.delete')} className="text-red-500 hover:text-red-700 p-1">
+                            <Trash2 className="w-4 h-4" aria-hidden="true" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <form onSubmit={addExpense} noValidate className="lg:col-span-4 bg-white p-5 rounded-2xl border border-gray-200 shadow-sm h-fit space-y-3">
+            <h3 className="font-bold text-sm text-amber-800 flex items-center gap-1.5">
+              <Plus className="w-4 h-4" aria-hidden="true" />
+              {t('fin.addExpense')}
+            </h3>
+            <Field id="exp-cat" label={t('fin.category')}>
+              <select id="exp-cat" className={inputClass} value={exp.category} onChange={(e) => setExp((s) => ({ ...s, category: e.target.value }))}>
+                {EXPENSE_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {t(`fin.cat.${c}`)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field id="exp-crop" label={t('fin.cropOptional')}>
+              <input id="exp-crop" list="crop-names" className={inputClass} value={exp.crop} maxLength={60} onChange={(e) => setExp((s) => ({ ...s, crop: e.target.value }))} />
+            </Field>
+            <Field id="exp-amount" label={t('fin.amount')} error={expErrors.amount}>
+              <input id="exp-amount" className={inputClass} type="number" inputMode="decimal" min="0" value={exp.amount} onChange={(e) => setExp((s) => ({ ...s, amount: e.target.value }))} placeholder="4500" />
+            </Field>
+            <Field id="exp-desc" label={t('fin.note')}>
+              <input id="exp-desc" className={inputClass} value={exp.description} maxLength={140} onChange={(e) => setExp((s) => ({ ...s, description: e.target.value }))} />
+            </Field>
+            <Field id="exp-date" label={t('fin.date')} error={expErrors.date}>
+              <input id="exp-date" className={inputClass} type="date" value={exp.date} onChange={(e) => setExp((s) => ({ ...s, date: e.target.value }))} />
+            </Field>
+            <button type="submit" className="w-full bg-forest-900 hover:bg-forest-700 text-white font-bold py-2.5 rounded-xl text-xs">
+              {t('fin.saveExpense')}
+            </button>
+          </form>
+
+          <section className="lg:col-span-8 bg-white p-5 rounded-2xl border border-gray-200 shadow-sm min-w-0">
+            <h3 className="font-bold text-sm text-forest-850 mb-3">{t('fin.expenseHistory')}</h3>
+            {expenses.length === 0 ? (
+              <p className="text-xs text-gray-500 py-6 text-center">{t('fin.noExpense')}</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-forest-50 text-gray-600 font-semibold border-b border-gray-200">
+                    <tr>
+                      <th scope="col" className="p-3">{t('fin.date')}</th>
+                      <th scope="col" className="p-3">{t('fin.category')}</th>
+                      <th scope="col" className="p-3">{t('fin.crop')}</th>
+                      <th scope="col" className="p-3">{t('fin.note')}</th>
+                      <th scope="col" className="p-3">{t('fin.amountShort')}</th>
+                      <th scope="col" className="p-3 text-right"><span className="sr-only">{t('common.delete')}</span></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {expenses.map((x) => (
+                      <tr key={x.id} className="hover:bg-gray-50">
+                        <td className="p-3 text-gray-500 whitespace-nowrap">{formatDate(x.date, lang)}</td>
+                        <td className="p-3 font-semibold text-gray-700">{t(`fin.cat.${x.category}`)}</td>
+                        <td className="p-3 font-bold text-gray-800">
+                          {x.crop || '—'}
+                          {x.sample && <span className="ml-1 text-[10px] font-bold uppercase text-amber-800 bg-amber-50 border border-amber-200 px-1 rounded">{t('common.sample')}</span>}
+                        </td>
+                        <td className="p-3 text-gray-500 max-w-[220px] truncate" title={x.description}>{x.description}</td>
+                        <td className="p-3 font-bold text-amber-800">{formatINR(x.amount)}</td>
+                        <td className="p-3 text-right">
+                          <button type="button" onClick={() => removeExpense(x.id)} aria-label={t('common.delete')} className="text-red-500 hover:text-red-700 p-1">
+                            <Trash2 className="w-4 h-4" aria-hidden="true" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
         </div>
       )}
+
+      {perCrop.length > 0 && (
+        <section className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm" aria-labelledby="percrop">
+          <h3 id="percrop" className="font-bold text-sm text-forest-850 mb-3">{t('fin.perCrop')}</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-left">
+              <thead className="bg-forest-50 text-gray-600 font-semibold border-b border-gray-200">
+                <tr>
+                  <th scope="col" className="p-3">{t('fin.crop')}</th>
+                  <th scope="col" className="p-3">{t('fin.revenue')}</th>
+                  <th scope="col" className="p-3">{t('fin.expense')}</th>
+                  <th scope="col" className="p-3">{t('fin.net')}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {perCrop.map((row) => (
+                  <tr key={row.crop}>
+                    <td className="p-3 font-bold text-gray-800">{row.crop}</td>
+                    <td className="p-3">{formatINR(row.revenue)}</td>
+                    <td className="p-3">{formatINR(row.expense)}</td>
+                    <td className={`p-3 font-bold ${row.net >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{formatINR(row.net)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {hasSamples && (
+        <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-900">
+          <span>{t('common.samplesNotice')}</span>
+          <button type="button" onClick={clearSamples} className="flex items-center gap-1 font-bold underline">
+            <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+            {t('common.clearSamples')}
+          </button>
+        </div>
+      )}
+
+      <datalist id="crop-names">
+        {cropNames.map((name) => (
+          <option key={name} value={name} />
+        ))}
+      </datalist>
     </div>
   );
 }

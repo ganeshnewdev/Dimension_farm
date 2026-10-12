@@ -1,121 +1,134 @@
-import React, { useState } from 'react';
-import { TrendingUp, Phone, MessageSquare, Search } from 'lucide-react';
-import { MANDI_RATES } from '../data/initialData';
+import React, { useMemo, useState } from 'react';
+import { ArrowRight, Info, Search, TrendingUp } from 'lucide-react';
+import { useLang } from '../i18n/index.jsx';
+import { SAMPLE_MANDI } from '../data/sample.js';
+import { pick } from '../data/crops.js';
+import { formatINR } from '../lib/format.js';
 
-export default function MandiSection({ t }) {
-  const [selectedState, setSelectedState] = useState("All");
-  const [searchCrop, setSearchCrop] = useState("");
+// The figures come from a bundled sample; this component is built so a real feed
+// (e.g. Agmarknet / e-NAM) can replace SAMPLE_MANDI without UI changes.
+export default function MandiSection({ limit, onViewAll }) {
+  const { t, lang } = useLang();
+  const [state, setState] = useState('all');
+  const [query, setQuery] = useState('');
+  const [sort, setSort] = useState('default');
 
-  const states = ["All", ...new Set(MANDI_RATES.map((m) => m.state))];
+  const states = useMemo(() => [...new Set(SAMPLE_MANDI.map((m) => m.state))].sort(), []);
 
-  const filteredRates = MANDI_RATES.filter((m) => {
-    const matchState = selectedState === "All" || m.state === selectedState;
-    const matchCrop =
-      !searchCrop ||
-      m.commodity.toLowerCase().includes(searchCrop.toLowerCase()) ||
-      m.mandi.toLowerCase().includes(searchCrop.toLowerCase()) ||
-      m.district.toLowerCase().includes(searchCrop.toLowerCase());
-    return matchState && matchCrop;
-  });
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    let list = SAMPLE_MANDI.filter((m) => {
+      if (state !== 'all' && m.state !== state) return false;
+      if (!q) return true;
+      return [pick(m.commodity, 'hi'), pick(m.commodity, 'en'), m.mandi, m.district, m.state].some((s) => s.toLowerCase().includes(q));
+    });
+    if (sort === 'high') list = [...list].sort((a, b) => b.modal - a.modal);
+    if (sort === 'low') list = [...list].sort((a, b) => a.modal - b.modal);
+    return limit ? list.slice(0, limit) : list;
+  }, [state, query, sort, limit]);
 
   return (
-    <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200/80">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+    <section className="bg-white rounded-2xl p-5 sm:p-6 shadow-sm border border-gray-200/80" aria-labelledby="mandi-heading">
+      <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
         <div>
-          <h2 className="text-xl font-bold text-[#193729] flex items-center gap-2">
-            <TrendingUp className="w-6 h-6 text-[#145C38]" />
-            {t.mandiTitle}
+          <h2 id="mandi-heading" className="text-xl font-bold text-forest-850 flex items-center gap-2">
+            <TrendingUp className="w-6 h-6 text-forest-900" aria-hidden="true" />
+            {t('mandi.title')}
           </h2>
-          <p className="text-xs text-gray-500 mt-0.5">{t.mandiSub}</p>
+          <p className="text-xs text-gray-500 mt-0.5">{t('mandi.subtitle')}</p>
         </div>
 
-        {/* Filters */}
-        <div className="flex flex-wrap gap-2">
-          <select
-            value={selectedState}
-            onChange={(e) => setSelectedState(e.target.value)}
-            className="text-xs bg-gray-50 border border-gray-300 rounded-xl px-3 py-2 outline-none font-semibold text-gray-700 focus:ring-1 focus:ring-[#75B85B]"
-          >
-            <option value="All">{t.allStates}</option>
-            {states.filter(s => s !== "All").map((st) => (
-              <option key={st} value={st}>{st}</option>
-            ))}
-          </select>
+        {!limit && (
+          <div className="flex flex-wrap gap-2 text-xs">
+            <label className="sr-only" htmlFor="mandi-state">
+              {t('mandi.state')}
+            </label>
+            <select id="mandi-state" value={state} onChange={(e) => setState(e.target.value)} className="bg-gray-50 border border-gray-300 rounded-xl px-3 py-2 outline-none font-semibold text-gray-700 focus:ring-2 focus:ring-forest-500">
+              <option value="all">{t('mandi.allStates')}</option>
+              {states.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
 
-          <div className="relative">
-            <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-2.5" />
-            <input
-              type="text"
-              placeholder="फसल या मंडी खोजें..."
-              value={searchCrop}
-              onChange={(e) => setSearchCrop(e.target.value)}
-              className="text-xs bg-gray-50 border border-gray-300 rounded-xl pl-8 pr-3 py-2 outline-none text-gray-700 focus:ring-1 focus:ring-[#75B85B]"
-            />
+            <label className="sr-only" htmlFor="mandi-sort">
+              {t('mandi.sort')}
+            </label>
+            <select id="mandi-sort" value={sort} onChange={(e) => setSort(e.target.value)} className="bg-gray-50 border border-gray-300 rounded-xl px-3 py-2 outline-none text-gray-700 focus:ring-2 focus:ring-forest-500">
+              <option value="default">{t('mandi.sortDefault')}</option>
+              <option value="high">{t('mandi.sortHigh')}</option>
+              <option value="low">{t('mandi.sortLow')}</option>
+            </select>
+
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-2.5" aria-hidden="true" />
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t('mandi.search')}
+                aria-label={t('mandi.search')}
+                className="bg-gray-50 border border-gray-300 rounded-xl pl-8 pr-3 py-2 outline-none text-gray-700 focus:ring-2 focus:ring-forest-500"
+              />
+            </div>
           </div>
+        )}
+      </div>
+
+      <div className="mb-4 flex items-start gap-2 bg-amber-50 border border-amber-200 text-amber-900 rounded-lg px-3 py-2 text-xs">
+        <Info className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
+        <span>{t('mandi.sampleNotice')}</span>
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="text-sm text-gray-500 py-6 text-center">{t('common.noResults')}</p>
+      ) : (
+        <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {rows.map((m) => {
+            const spread = m.max - m.min;
+            const pos = spread > 0 ? ((m.modal - m.min) / spread) * 100 : 50;
+            return (
+              <li key={m.id} className="border border-gray-200 rounded-xl p-4 bg-white hover:border-forest-500 hover:shadow-md transition-all">
+                <div className="flex justify-between items-start gap-2">
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-forest-900 border border-emerald-200">{m.mandi}</span>
+                  <span className="text-[10px] font-bold uppercase tracking-wide text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">{t('common.sample')}</span>
+                </div>
+                <h3 className="text-base font-bold text-forest-850 mt-2">{pick(m.commodity, lang)}</h3>
+                <p className="text-xs text-gray-500">
+                  {m.district}, {m.state}
+                </p>
+
+                <div className="mt-3 p-2.5 bg-forest-50 rounded-lg">
+                  <div className="flex justify-between items-baseline">
+                    <span className="text-xs text-gray-500">{t('mandi.modal')}</span>
+                    <span className="text-lg font-extrabold text-forest-900">
+                      {formatINR(m.modal)}
+                      <span className="text-xs font-normal text-gray-600"> {t('mandi.perQuintal')}</span>
+                    </span>
+                  </div>
+                  <div className="mt-2 h-1.5 rounded-full bg-gray-200 relative" aria-hidden="true">
+                    <span className="absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full bg-forest-900 border border-white" style={{ left: `calc(${pos}% - 5px)` }} />
+                  </div>
+                  <div className="flex justify-between text-[11px] text-gray-500 mt-1.5">
+                    <span>{formatINR(m.min)}</span>
+                    <span>{formatINR(m.max)}</span>
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {limit && onViewAll && (
+        <div className="mt-4 text-right">
+          <button type="button" onClick={onViewAll} className="inline-flex items-center gap-1 text-xs font-bold text-forest-900 hover:underline">
+            {t('mandi.viewAll')}
+            <ArrowRight className="w-4 h-4" aria-hidden="true" />
+          </button>
         </div>
-      </div>
-
-      {/* Mandi Rates Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {filteredRates.map((item) => (
-          <div
-            key={item.id}
-            className="border border-gray-200 rounded-xl p-4 hover:border-[#75B85B] hover:shadow-md transition-all bg-white flex flex-col justify-between"
-          >
-            <div>
-              <div className="flex justify-between items-start">
-                <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-[#145C38] border border-emerald-200">
-                  {item.mandi}
-                </span>
-                <span className="text-[11px] text-emerald-600 font-medium">{item.date}</span>
-              </div>
-
-              <h3 className="text-base font-bold text-[#193729] mt-2">{item.commodity}</h3>
-              <p className="text-xs text-gray-500">{item.district}, {item.state}</p>
-
-              <div className="mt-3 p-2.5 bg-[#F4F7F3] rounded-lg">
-                <div className="flex justify-between items-baseline">
-                  <span className="text-xs text-gray-500">{t.modalPrice}:</span>
-                  <span className="text-lg font-extrabold text-[#145C38]">
-                    ₹{item.modalPrice} <span className="text-xs font-normal text-gray-600">{item.unit}</span>
-                  </span>
-                </div>
-                <div className="flex justify-between text-xs text-gray-500 mt-1">
-                  <span>{t.minMaxPrice}:</span>
-                  <span className="font-medium text-gray-700">₹{item.minPrice} - ₹{item.maxPrice}</span>
-                </div>
-              </div>
-
-              {/* Commission Agent / Trader Details */}
-              <div className="mt-3 pt-2 border-t border-gray-100">
-                <p className="text-[11px] text-gray-500 font-medium">{t.contactTrader}:</p>
-                <p className="text-xs font-semibold text-gray-800 truncate">{item.trader}</p>
-              </div>
-            </div>
-
-            {/* Direct Call & WhatsApp Buttons */}
-            <div className="mt-4 pt-2 flex gap-2">
-              <a
-                href={`tel:${item.phone.replace(/\s+/g, '')}`}
-                className="flex-1 bg-[#145C38] hover:bg-[#23764A] text-white text-xs font-semibold py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-colors shadow-sm"
-              >
-                <Phone className="w-3.5 h-3.5" />
-                <span>{t.callNow}</span>
-              </a>
-              <a
-                href={`https://wa.me/${item.phone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(`नमस्ते, मुझे ${item.commodity} (${item.mandi}) के भाव के संदर्भ में बात करनी है।`)}`}
-                target="_blank"
-                rel="noreferrer"
-                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-colors shadow-sm"
-                title="WhatsApp पर बात करें"
-              >
-                <MessageSquare className="w-3.5 h-3.5" />
-              </a>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
+      )}
+    </section>
   );
 }

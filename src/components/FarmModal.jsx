@@ -1,147 +1,147 @@
-import React, { useEffect, useState } from 'react';
-import { X, MapPin, CloudSun, Activity, Sprout } from 'lucide-react';
-import { fetchLiveWeather } from '../services/weatherService';
+import React from 'react';
+import { Activity, AlertTriangle, CalendarDays, CloudSun, Loader2, RefreshCw, Trash2 } from 'lucide-react';
+import { useLang } from '../i18n/index.jsx';
+import { useWeather } from '../hooks/useWeather.js';
+import { sprayAdvice, windBand } from '../lib/spray.js';
+import { formatDate } from '../lib/format.js';
+import Modal from './ui/Modal.jsx';
+import { farmCropName, farmProgress } from './FarmsSection.jsx';
 
-export default function FarmModal({ farm, onClose, t }) {
-  const [farmWeather, setFarmWeather] = useState(null);
-  const [loading, setLoading] = useState(true);
+function Stat({ label, value, hint }) {
+  return (
+    <div className="bg-white p-3 rounded-lg border border-gray-200">
+      <span className="text-xs text-gray-500">{label}</span>
+      <p className="text-xl font-bold text-forest-850">{value}</p>
+      {hint && <span className="text-[11px] text-gray-500">{hint}</span>}
+    </div>
+  );
+}
 
-  useEffect(() => {
-    if (!farm) return;
-    setLoading(true);
-    fetchLiveWeather(farm.lat, farm.lon)
-      .then((data) => {
-        setFarmWeather(data);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, [farm]);
+export default function FarmModal({ farm, onClose, onDelete }) {
+  const { t, lang } = useLang();
+  const { data, loading, error, refresh } = useWeather(farm.lat, farm.lon);
+  const progress = farmProgress(farm);
+  const test = farm.soilTest;
+  const spray = data ? sprayAdvice(data) : null;
 
-  if (!farm) return null;
+  const confirmDelete = () => {
+    if (window.confirm(t('farm.confirmDelete', { name: farm.name }))) onDelete(farm.id);
+  };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-gray-100">
-        {/* Modal Header */}
-        <div className="bg-[#145C38] text-white p-5 flex items-center justify-between rounded-t-2xl">
-          <div className="flex items-center gap-3">
-            <img 
-              src={`${import.meta.env.BASE_URL}logo.png`} 
-              alt="Logo" 
-              className="w-9 h-9 rounded-full border border-emerald-400 object-cover bg-white"
-            />
-            <div>
-              <h3 className="text-lg font-bold flex items-center gap-2">
-                {farm.name}
-              </h3>
-              <p className="text-xs text-emerald-200 flex items-center gap-1 mt-0.5">
-                <MapPin className="w-3.5 h-3.5" />
-                {farm.location} ({farm.area})
+    <Modal
+      title={farm.name}
+      subtitle={`${farm.location} · ${t('farm.areaValue', { n: farm.area })} · ${farmCropName(farm, lang)}`}
+      onClose={onClose}
+      footer={
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={confirmDelete}
+            className="flex items-center gap-1.5 text-xs font-semibold text-red-600 hover:text-red-800 px-3 py-2 rounded-lg hover:bg-red-50"
+          >
+            <Trash2 className="w-4 h-4" aria-hidden="true" />
+            {t('farm.delete')}
+          </button>
+          <button type="button" onClick={onClose} className="px-5 py-2 bg-forest-900 text-white rounded-xl text-sm font-semibold hover:bg-forest-700">
+            {t('common.close')}
+          </button>
+        </div>
+      }
+    >
+      <div className="space-y-6">
+        <section className="bg-forest-50 rounded-xl p-4 border border-emerald-100" aria-busy={loading}>
+          <h4 className="text-sm font-bold text-forest-900 flex items-center gap-2 mb-3">
+            <CloudSun className="w-4 h-4 text-forest-500" aria-hidden="true" />
+            {t('farm.liveWeather')}
+          </h4>
+
+          {data ? (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <Stat label={t('wx.temp')} value={`${data.temp}°C`} hint={t('wx.feels', { n: data.feelsLike })} />
+              <Stat label={t('wx.wind')} value={`${data.wind} km/h`} hint={t(`wx.windband.${windBand(data.wind)}`)} />
+              <Stat label={t('wx.humidity')} value={`${data.humidity}%`} />
+              <Stat label={t('wx.rainProb')} value={`${data.rainProb}%`} hint={spray ? `${t('wx.spray')}: ${t(`spray.${spray.level}`)}` : ''} />
+            </div>
+          ) : loading ? (
+            <p className="text-sm text-gray-500 flex items-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+              {t('wx.loading')}
+            </p>
+          ) : null}
+
+          {error && (
+            <div role="alert" className="mt-2 flex items-center gap-3 text-xs text-amber-800">
+              <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" />
+              <span className="flex-1">{t('wx.error')}</span>
+              <button type="button" onClick={refresh} className="flex items-center gap-1 font-bold underline">
+                <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
+                {t('common.retry')}
+              </button>
+            </div>
+          )}
+        </section>
+
+        <section>
+          <h4 className="text-sm font-bold text-forest-900 mb-2 flex items-center gap-1.5">
+            <CalendarDays className="w-4 h-4 text-forest-500" aria-hidden="true" />
+            {t('farm.calendar')}
+          </h4>
+          {progress ? (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-center text-xs">
+                <div className="p-2.5 bg-emerald-50 rounded-lg border border-emerald-100">
+                  <span className="text-gray-500 block">{t('farm.stage')}</span>
+                  <span className="font-bold text-forest-900 mt-0.5 block">{t(`stage.${progress.stage}`)}</span>
+                </div>
+                <div className="p-2.5 bg-gray-50 rounded-lg border border-gray-200">
+                  <span className="text-gray-500 block">{t('farm.sownDate')}</span>
+                  <span className="font-semibold text-gray-800 mt-0.5 block">{formatDate(farm.sownDate, lang)}</span>
+                </div>
+                <div className="p-2.5 bg-gray-50 rounded-lg border border-gray-200">
+                  <span className="text-gray-500 block">{t('farm.harvest')}</span>
+                  <span className="font-semibold text-gray-800 mt-0.5 block">{formatDate(progress.harvestDate, lang)}</span>
+                </div>
+              </div>
+              <p className="text-xs text-gray-600 mt-2">
+                {progress.stage === 'notSown'
+                  ? t('farm.daysToSow', { n: -progress.elapsed })
+                  : progress.stage === 'harvestDue'
+                    ? t('farm.harvestDue', { n: -progress.daysToHarvest })
+                    : t('farm.daysProgress', { done: progress.elapsed, left: progress.daysToHarvest })}
               </p>
+              <p className="text-[11px] text-gray-400 mt-1">{t('farm.estimateNote')}</p>
+            </>
+          ) : (
+            <p className="text-xs text-gray-500">{t('farm.noCalendar')}</p>
+          )}
+        </section>
+
+        <section>
+          <h4 className="text-sm font-bold text-forest-900 mb-2 flex items-center gap-1.5">
+            <Activity className="w-4 h-4 text-forest-500" aria-hidden="true" />
+            {t('farm.soilHealth')}
+          </h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+            <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+              <span className="text-xs text-gray-500 block">{t('farm.soil')}</span>
+              <span className="font-semibold text-gray-800">{farm.soil ? t(`soil.${farm.soil}`) : t('common.notEntered')}</span>
+            </div>
+            <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+              <span className="text-xs text-gray-500 block">pH</span>
+              <span className="font-semibold text-gray-800">{test?.ph ?? t('common.notEntered')}</span>
+            </div>
+            <div className="p-3 bg-gray-50 rounded-lg border border-gray-200 sm:col-span-2">
+              <span className="text-xs text-gray-500 block">N-P-K (kg/ha)</span>
+              <span className="font-semibold text-gray-800">
+                {test && (test.n !== null || test.p !== null || test.k !== null)
+                  ? `N: ${test.n ?? '—'} | P: ${test.p ?? '—'} | K: ${test.k ?? '—'}`
+                  : t('common.notEntered')}
+              </span>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors text-white"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        <div className="p-6 space-y-6">
-          {/* Farm-Specific Live Weather Section */}
-          <div className="bg-[#F4F7F3] rounded-xl p-4 border border-emerald-100">
-            <h4 className="text-sm font-bold text-[#145C38] flex items-center gap-2 mb-3">
-              <CloudSun className="w-4 h-4 text-[#75B85B]" />
-              खेत का लाइव उपग्रह मौसम ({farm.location})
-            </h4>
-
-            {loading ? (
-              <p className="text-sm text-gray-500 py-2">लाइव मौसम डेटा लोड हो रहा है...</p>
-            ) : farmWeather ? (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div className="bg-white p-3 rounded-lg border border-gray-200">
-                  <span className="text-xs text-gray-500">तापमान</span>
-                  <p className="text-xl font-bold text-[#193729]">{farmWeather.temp}°C</p>
-                  <span className="text-[11px] text-gray-400">अनुमान: {farmWeather.feelsLike}°C</span>
-                </div>
-                <div className="bg-white p-3 rounded-lg border border-gray-200">
-                  <span className="text-xs text-gray-500">हवा की गति</span>
-                  <p className="text-xl font-bold text-[#193729]">{farmWeather.wind} km/h</p>
-                  <span className="text-[11px] text-emerald-600">
-                    {farmWeather.wind > 18 ? "तेज हवा" : "शांत"}
-                  </span>
-                </div>
-                <div className="bg-white p-3 rounded-lg border border-gray-200">
-                  <span className="text-xs text-gray-500">नमी</span>
-                  <p className="text-xl font-bold text-[#193729]">{farmWeather.humidity}%</p>
-                  <span className="text-[11px] text-gray-400">संतुलित</span>
-                </div>
-                <div className="bg-white p-3 rounded-lg border border-gray-200">
-                  <span className="text-xs text-gray-500">बारिश संभावना</span>
-                  <p className="text-xl font-bold text-emerald-700">{farmWeather.rainProb}%</p>
-                  <span className="text-[11px] text-emerald-600">
-                    {farmWeather.rainProb > 40 ? "संभावित" : "न्यूनतम"}
-                  </span>
-                </div>
-              </div>
-            ) : (
-              <p className="text-xs text-amber-600">मौसम डेटा प्राप्त नहीं हो सका। पुनः प्रयास करें।</p>
-            )}
-          </div>
-
-          {/* Soil & Nutrient Health */}
-          <div>
-            <h4 className="text-sm font-bold text-[#145C38] mb-2 flex items-center gap-1.5">
-              <Activity className="w-4 h-4 text-[#75B85B]" />
-              मृदा स्वास्थ्य व N-P-K विश्लेषण
-            </h4>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-              <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
-                <span className="text-xs text-gray-500 block">मिट्टी का प्रकार:</span>
-                <span className="font-semibold text-gray-800">{farm.soil}</span>
-              </div>
-              <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
-                <span className="text-xs text-gray-500 block">pH स्तर:</span>
-                <span className="font-semibold text-emerald-800">{farm.ph}</span>
-              </div>
-              <div className="p-3 bg-gray-50 rounded-lg border border-gray-200 sm:col-span-2">
-                <span className="text-xs text-gray-500 block">N-P-K अनुपात:</span>
-                <span className="font-semibold text-gray-800">{farm.npk}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Crop Stage & Calendar */}
-          <div>
-            <h4 className="text-sm font-bold text-[#145C38] mb-2">फसल चक्र व महत्वपूर्ण तिथियां</h4>
-            <div className="grid grid-cols-3 gap-2 text-center text-xs">
-              <div className="p-2.5 bg-emerald-50 rounded-lg border border-emerald-100">
-                <span className="text-gray-500 block">वर्तमान अवस्था</span>
-                <span className="font-bold text-[#145C38] mt-0.5 block">{farm.stage}</span>
-              </div>
-              <div className="p-2.5 bg-gray-50 rounded-lg border border-gray-200">
-                <span className="text-gray-500 block">बुवाई तिथि</span>
-                <span className="font-semibold text-gray-800 mt-0.5 block">{farm.sownDate}</span>
-              </div>
-              <div className="p-2.5 bg-gray-50 rounded-lg border border-gray-200">
-                <span className="text-gray-500 block">संभावित कटाई</span>
-                <span className="font-semibold text-gray-800 mt-0.5 block">{farm.estHarvest}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="bg-gray-50 px-6 py-4 rounded-b-2xl border-t border-gray-100 flex justify-end">
-          <button
-            onClick={onClose}
-            className="px-5 py-2 bg-[#145C38] text-white rounded-xl text-sm font-semibold hover:bg-[#23764A] transition-colors"
-          >
-            {t.close}
-          </button>
-        </div>
+        </section>
       </div>
-    </div>
+    </Modal>
   );
 }
